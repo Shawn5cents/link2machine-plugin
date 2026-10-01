@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "link2machine",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Connect supported AI clients to explicitly enrolled computers through typed operations, exact-machine routing, local policy, and execution receipts.",
   "author": {
     "name": "Nichols SI",
