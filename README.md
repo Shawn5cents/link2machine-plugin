@@ -41,6 +41,22 @@ The repository also contains the Claude plugin layout:
 
 This layout is intended for Claude's public plugin marketplace/directory and points to the same production remote MCP endpoint.
 
+### Native computer agent (Linux x64 / ARM64)
+
+Install the 0.6.1 native controller using the hosted bootstrap package:
+
+```bash
+npx --yes --package=https://downloads.nicholsai.com/v0.6.1/nicholsai-link2machine-0.6.1.tgz link2machine-bootstrap install
+```
+
+The installer selects the current platform artifact, verifies its SHA-256, and
+checks the installed native version. The scoped npm registry package is not
+published yet; the HTTPS package URL above is the supported public bootstrap.
+
+Enroll the computer through your Link2Machine account and configure its root and
+permissions locally. Secret import additionally requires local write permission
+and `LINK2MACHINE_ALLOW_SECRET_IMPORT=1`; see [tool coverage](TOOL_COVERAGE.md).
+
 ### Generic MCP clients
 
 Any compatible client can connect to:
