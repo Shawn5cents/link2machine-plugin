@@ -1,0 +1,50 @@
+name: plugin-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: [self-hosted, Linux, X64, link2machine-plugin-ci]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate public package
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          expected_endpoint = "https://mcp.nicholsai.com/mcp"
+          plugin = json.loads(Path("plugin.json").read_text())
+          mcp = json.loads(Path("mcp.json").read_text())
+          server = json.loads(Path("server.json").read_text())
+          claude = json.loads(Path(".claude-plugin/plugin.json").read_text())
+          claude_mcp = json.loads(Path(".mcp.json").read_text())
+
+          assert plugin["version"] == "0.7.6"
+          assert plugin["repository"] == "https://github.com/Shawn5cents/link2machine-plugin"
+          assert plugin["extensions"]["com.openai"]["publication"]["release_notes"]
+          assert mcp["mcpServers"]["link2machine"]["url"] == expected_endpoint
+          assert server["version"] == "0.7.6"
+          assert server["remotes"][0]["url"] == expected_endpoint
+          assert claude["version"] == "0.7.6"
+          assert claude_mcp["mcpServers"]["link2machine"]["url"] == expected_endpoint
+
+          for required in [
+              "README.md", "LICENSE", "assets/logo-v2.png",
+              "assets/composer-icon-v2.png", "skills/link2machine/SKILL.md",
+          ]:
+              p = Path(required)
+              assert p.is_file() and p.stat().st_size > 0, required
+
+          readme = Path("README.md").read_text()
+          assert "bootstrap/v0.6.2/nicholsai-link2machine-0.6.2.tgz" in readme
+          assert "link2machine-bootstrap connect --root" in readme
+          print("Link2Machine public plugin verification: PASS")
+          PY
+
+      - name: Diff hygiene
+        run: git diff --check
