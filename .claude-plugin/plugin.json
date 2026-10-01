@@ -1,7 +1,7 @@
 {
   "name": "link2machine",
   "displayName": "Link2Machine",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Use an explicitly selected computer from Claude through typed tools, local policy, and verifiable execution receipts.",
   "author": {
     "name": "Nichols SI",
