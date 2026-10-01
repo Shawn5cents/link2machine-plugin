@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "link2machine": {
+      "type": "http",
+      "url": "https://mcp.nicholsai.com/mcp"
+    }
+  }
+}

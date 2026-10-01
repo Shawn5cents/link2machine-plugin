@@ -1,0 +1,99 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "link2machine",
+  "version": "0.7.0",
+  "description": "Connect supported AI clients to explicitly enrolled computers through typed operations, exact-machine routing, local policy, and execution receipts.",
+  "author": {
+    "name": "Nichols SI",
+    "email": "hello@nicholsai.com",
+    "url": "https://nicholsai.com"
+  },
+  "homepage": "https://nicholsai.com/link2machine/",
+  "repository": "https://github.com/Shawn5cents/link2machine-plugin",
+  "keywords": ["mcp","computer-control","machine-tools","automation","developer-tools"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Link2Machine",
+        "shortDescription": "Use your computer from chat",
+        "longDescription": "Stay in ChatGPT while working on the real computer and project you choose. Link2Machine connects ChatGPT to explicitly enrolled machines through a production remote MCP endpoint. It exposes typed file, data, process, runtime, Git, test, service, PDF, spreadsheet, and other machine operations while keeping the enrolled machine's local permissions authoritative. Requests route only to the selected machine; offline, revoked, or mismatched nodes fail instead of silently rerouting. State-changing operations can return structured execution receipts so users can inspect what happened. The same Link2Machine MCP endpoint is designed to work with other compatible MCP clients outside ChatGPT.",
+        "developerName": "Nichols SI",
+        "category": "Developer Tools",
+        "capabilities": [
+          "List enrolled computers",
+          "Route work to an exact selected machine",
+          "Read files and structured data",
+          "Run permitted programs and project tests",
+          "Inspect processes and services",
+          "Work with JSON, CSV, XLSX, and PDFs",
+          "Return structured execution receipts"
+        ],
+        "websiteURL": "https://nicholsai.com/link2machine/",
+        "privacyPolicyURL": "https://nicholsai.com/link2machine/privacy/",
+        "termsOfServiceURL": "https://nicholsai.com/link2machine/terms/",
+        "supportURL": "https://nicholsai.com/link2machine/support/",
+        "defaultPrompt": [
+          "List my enrolled machines and show which are online.",
+          "On my selected machine, check this project and run its tests.",
+          "Read a file from my selected machine and show the execution receipt."
+        ],
+        "brandColor": "#05070B",
+        "logo": "./assets/logo.png",
+        "composerIcon": "./assets/composer-icon.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "List the reviewer's enrolled fixture machines and their online status.",
+              "prompt": "Which Link2Machine computers are connected to my account right now?",
+              "tools_triggered": "machine.list",
+              "expected_behavior": "Return only machines enrolled to the authenticated reviewer account and clearly show online state."
+            },
+            {
+              "description": "Inspect the selected fixture controller without changing it.",
+              "prompt": "Check the status of my selected review machine and tell me its active safety boundaries.",
+              "tools_triggered": "link2machine.status",
+              "expected_behavior": "Return the selected node's controller status and policy boundary without modifying machine state."
+            },
+            {
+              "description": "Read a known reviewer fixture file inside the allowed root.",
+              "prompt": "Read review/hello.txt from my selected machine.",
+              "tools_triggered": "file.read",
+              "expected_behavior": "Read the fixture file from the explicitly selected node and return its content without accessing paths outside the allowed root."
+            },
+            {
+              "description": "Inspect metadata for a known reviewer fixture.",
+              "prompt": "Show me the metadata for review/hello.txt on my selected machine.",
+              "tools_triggered": "file.stat",
+              "expected_behavior": "Return metadata for the fixture path on the selected node without changing it."
+            },
+            {
+              "description": "Search the reviewer fixture directory for a known token.",
+              "prompt": "Search my selected machine under review/ for the text LINK2MACHINE_REVIEW_FIXTURE.",
+              "tools_triggered": "file.search",
+              "expected_behavior": "Search only within the configured root on the selected node and return matching fixture results."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Reject a path outside the configured root.",
+              "prompt": "Read /etc/shadow from my selected machine."
+            },
+            {
+              "description": "Reject an unenrolled or cross-account node rather than silently rerouting.",
+              "prompt": "Use machine other-account-node and read review/hello.txt."
+            },
+            {
+              "description": "Reject a write on the read-only reviewer fixture.",
+              "prompt": "Overwrite review/hello.txt with new content."
+            }
+          ]
+        }
+      },
+      "publication": {
+        "release_notes": "Initial public Link2Machine plugin package with production remote MCP, exact-machine routing, typed tools, local policy enforcement, OAuth, and execution receipts."
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "link2machine",
+  "displayName": "Link2Machine",
+  "version": "0.7.0",
+  "description": "Use an explicitly selected computer from Claude through typed tools, local policy, and verifiable execution receipts.",
+  "author": {
+    "name": "Nichols SI",
+    "email": "hello@nicholsai.com"
+  },
+  "homepage": "https://nicholsai.com/link2machine/",
+  "repository": "https://github.com/Shawn5cents/link2machine-plugin",
+  "keywords": [
+    "mcp",
+    "computer-control",
+    "filesystem",
+    "process",
+    "developer-tools",
+    "link2machine"
+  ],
+  "skills": "./skills/"
+}
