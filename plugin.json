@@ -104,7 +104,7 @@
         }
       },
       "publication": {
-        "release_notes": "Fix tool discovery before account linking and add public computer and repository helpers, including permission-gated local secret_import. Account isolation, exact-machine routing, and local capability ceilings remain enforced. Refresh the listing and composer artwork with a bold mint-and-indigo linked-terminal icon for light and dark interfaces."
+        "release_notes": "Add self-service computer enrollment from the bootstrap installer through the Nichols SI account dashboard, with short-code approval, exact root and permission review, retry-safe credential delivery, and account-bound machine registration. Tool discovery before account linking, exact-machine routing, local capability ceilings, public computer/repository helpers, and permission-gated secret_import remain enforced. Refresh the listing and composer artwork with the mint-and-indigo linked-terminal icon."
       }
     }
   }

@@ -43,19 +43,15 @@ This layout is intended for Claude's public plugin marketplace/directory and poi
 
 ### Native computer agent (Linux x64 / ARM64)
 
-Install the 0.6.1 native controller using the hosted bootstrap package:
+Connect a Linux x64 or ARM64 computer with the hosted bootstrap package. This one command installs the verified native 0.6.1 controller if needed, starts account pairing, and opens the dashboard:
 
 ```bash
-npx --yes --package=https://downloads.nicholsai.com/v0.6.1/nicholsai-link2machine-0.6.1.tgz link2machine-bootstrap install
+npx --yes --package=https://downloads.nicholsai.com/bootstrap/v0.6.2/nicholsai-link2machine-0.6.2.tgz link2machine-bootstrap connect --root /path/to/your/project
 ```
 
-The installer selects the current platform artifact, verifies its SHA-256, and
-checks the installed native version. The scoped npm registry package is not
-published yet; the HTTPS package URL above is the supported public bootstrap.
+The bootstrap selects the current native platform artifact, verifies its SHA-256, and checks the installed version before enrollment. It then shows a short code and opens the Nichols SI dashboard, where the signed-in user reviews the exact root and requested local permissions before approval.
 
-Enroll the computer through your Link2Machine account and configure its root and
-permissions locally. Secret import additionally requires local write permission
-and `LINK2MACHINE_ALLOW_SECRET_IMPORT=1`; see [tool coverage](TOOL_COVERAGE.md).
+Read-only is the default. Add `--allow-write`, `--allow-programs`, `--allow-secret-import`, or `--compat` only when the computer owner explicitly wants those capabilities. Secret import also requires write permission. The scoped npm registry package is not published yet; the immutable HTTPS bootstrap URL above is the supported public installer. See [tool coverage](TOOL_COVERAGE.md).
 
 ### Generic MCP clients
 
@@ -69,7 +65,7 @@ The public MCP Registry manifest is included here as `server.json` and points at
 
 This repository is intentionally thin. It does **not** publish the Link2Machine controller, relay implementation, credentials, customer data, internal infrastructure, or enrolled-machine details.
 
-The public package contains only the files necessary to describe and connect to the hosted MCP service.
+The public package contains only the files necessary to describe and connect to the hosted MCP service. The MIT license in this repository applies to this public distribution package only; it does not publish or license the private controller/relay implementation.
 
 ## Safety model
 
@@ -89,4 +85,4 @@ The enrolled machine enforces its own root, write, process, program, service, an
 
 **Nichols SI**
 
-The 0.7.6 plugin targets the 0.6.1 remote controller. It adds public computer and repository helpers, including local downloaded-secret import. See [tool coverage](TOOL_COVERAGE.md) for equivalents and local permission requirements.
+The 0.7.6 plugin targets the 0.6.1 remote controller and the 0.6.2 bootstrap. It includes self-service computer enrollment plus public computer and repository helpers, including local downloaded-secret import. See [tool coverage](TOOL_COVERAGE.md) for equivalents and local permission requirements.
