@@ -72,3 +72,5 @@ The enrolled machine enforces its own root, write, process, program, service, an
 ## Publisher
 
 **Nichols SI**
+
+The 0.7.5 plugin targets the 0.6.1 remote controller. It adds public computer and repository helpers, including local downloaded-secret import. See [tool coverage](TOOL_COVERAGE.md) for equivalents and local permission requirements.

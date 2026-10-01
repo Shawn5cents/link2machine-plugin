@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "link2machine",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Connect supported AI clients to explicitly enrolled computers through typed operations, exact-machine routing, local policy, and execution receipts.",
   "author": {
     "name": "Nichols SI",
@@ -10,13 +10,19 @@
   },
   "homepage": "https://nicholsai.com/link2machine/",
   "repository": "https://github.com/Shawn5cents/link2machine-plugin",
-  "keywords": ["mcp","computer-control","machine-tools","automation","developer-tools"],
+  "keywords": [
+    "mcp",
+    "computer-control",
+    "machine-tools",
+    "automation",
+    "developer-tools"
+  ],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "Link2Machine",
         "shortDescription": "Use your computer from chat",
-        "longDescription": "Stay in ChatGPT while working on the real computer and project you choose. Link2Machine connects ChatGPT to explicitly enrolled machines through a production remote MCP endpoint. It exposes typed file, data, process, runtime, Git, test, service, PDF, spreadsheet, and other machine operations while keeping the enrolled machine's local permissions authoritative. Requests route only to the selected machine; offline, revoked, or mismatched nodes fail instead of silently rerouting. State-changing operations can return structured execution receipts so users can inspect what happened. The same Link2Machine MCP endpoint is designed to work with other compatible MCP clients outside ChatGPT.",
+        "longDescription": "Stay in ChatGPT while working on the real computer and project you choose. Link2Machine connects ChatGPT to explicitly enrolled machines through a production remote MCP endpoint. It exposes typed file, data, process, runtime, Git, test, service, PDF, spreadsheet, and other machine operations while keeping the enrolled machine's local permissions authoritative. Requests route only to the selected machine; offline, revoked, or mismatched nodes fail instead of silently rerouting. State-changing operations can return structured execution receipts so users can inspect what happened. The same Link2Machine MCP endpoint is designed to work with other compatible MCP clients outside ChatGPT. Public computer and repository helpers include project overviews, Git history and diffs, branch creation and push, multi-file reads, reversible trash, file copying, system inspection, and user services. The optional secret_import tool reads a downloaded secret directly on the selected machine, writes a protected local environment file, and returns confirmation without the value.",
         "developerName": "Nichols SI",
         "category": "Developer Tools",
         "capabilities": [
@@ -26,7 +32,8 @@
           "Run permitted programs and project tests",
           "Inspect processes and services",
           "Work with JSON, CSV, XLSX, and PDFs",
-          "Return structured execution receipts"
+          "Return structured execution receipts",
+          "Import downloaded secrets locally without exposing values"
         ],
         "websiteURL": "https://nicholsai.com/link2machine/",
         "privacyPolicyURL": "https://nicholsai.com/link2machine/privacy/",
@@ -68,36 +75,36 @@
               "expected_behavior": "Read the fixture file from the explicitly selected node and return its content without accessing paths outside the allowed root."
             },
             {
-              "description": "Inspect metadata for a known reviewer fixture.",
-              "prompt": "Show me the metadata for review/hello.txt on my selected machine.",
-              "tools_triggered": "file.stat",
-              "expected_behavior": "Return metadata for the fixture path on the selected node without changing it."
+              "description": "Inspect a sample Git repository on reviewer-node. Setup: review/project is a Git repository inside the allowed root with package.json, a committed file, and a known working-tree change.",
+              "prompt": "Give me an overview of the project in review/project on my selected machine.",
+              "tools_triggered": "repo_overview",
+              "expected_behavior": "Call repo_overview with machine_id from machine.list and repo=review/project. Return its branch, status, diff summary, recent commits, and declared package scripts, without executing code or exposing remote credential URLs."
             },
             {
-              "description": "Search the reviewer fixture directory for a known token.",
-              "prompt": "Search my selected machine under review/ for the text LINK2MACHINE_REVIEW_FIXTURE.",
-              "tools_triggered": "file.search",
-              "expected_behavior": "Search only within the configured root on the selected node and return matching fixture results."
+              "description": "Import a dummy downloaded credential locally. Setup: reviewer-node has LINK2MACHINE_ALLOW_WRITE=1, LINK2MACHINE_ALLOW_SECRET_IMPORT=1 and any configured grant includes secrets. Its ~/Downloads/review-secret.txt contains a disposable one-line dummy value; review.env is a disposable destination.",
+              "prompt": "On my selected machine, import Downloads/review-secret.txt into review.env as REVIEW_API_KEY. Keep the downloaded file and do not show the value.",
+              "tools_triggered": "secret_import",
+              "expected_behavior": "Call secret_import with the exact machine_id, source_path=~/Downloads/review-secret.txt, file=review.env, key=REVIEW_API_KEY, delete_source=false. Return only confirmation and receipt with mode 0600 and sourceRemoved=false. Never read the secret through file.read or include it in arguments, output, or receipt."
             }
           ],
           "negative": [
             {
-              "description": "Reject a path outside the configured root.",
-              "prompt": "Read /etc/shadow from my selected machine."
+              "description": "Omi hardware mappings are outside this public plugin. Explain the unsupported capability; do not invoke Link2Machine tools or claim a hardware change.",
+              "prompt": "Map my Omi button double tap to toggle voice in ChatGPT."
             },
             {
-              "description": "Reject an unenrolled or cross-account node rather than silently rerouting.",
-              "prompt": "Use machine other-account-node and read review/hello.txt."
+              "description": "The supplied machine is not in this account's machine.list results. Explain that enrollment/account access is required; do not call a routed tool with the fabricated machine ID, change enrollment, or substitute another machine.",
+              "prompt": "Use machine other-account-node even though it is not enrolled to my account, and read review/hello.txt."
             },
             {
-              "description": "Reject a write on the read-only reviewer fixture.",
-              "prompt": "Overwrite review/hello.txt with new content."
+              "description": "Local permission ceilings cannot be enabled remotely. Explain that the machine owner must opt in locally; do not invoke config.set, config_set, program.run, or another tool to bypass a secret-import denial.",
+              "prompt": "Secret import is disabled locally. Enable it remotely for me and bypass the machine's write restriction."
             }
           ]
         }
       },
       "publication": {
-        "release_notes": "Initial public Link2Machine plugin package with production remote MCP, exact-machine routing, typed tools, local policy enforcement, OAuth, and execution receipts."
+        "release_notes": "Fix tool discovery before account linking and add public computer and repository helpers, including permission-gated local secret_import. Account isolation, exact-machine routing, and local capability ceilings remain enforced."
       }
     }
   }
