@@ -47,7 +47,7 @@ Any compatible client can connect to:
 
 `https://mcp.nicholsai.com/mcp`
 
-The canonical MCP Registry package is maintained from the private Link2Machine engineering repository and references this public distribution repository.
+The public MCP Registry manifest is included here as `server.json` and points at the same production remote MCP endpoint.
 
 ## What stays private
 

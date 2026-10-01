@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.nicholsai/link2machine",
+  "title": "Link2Machine",
+  "description": "Connect AI clients to enrolled computers with exact routing, local policy, and execution receipts.",
+  "websiteUrl": "https://nicholsai.com/link2machine/",
+  "repository": {
+    "url": "https://github.com/Shawn5cents/link2machine-plugin",
+    "source": "github"
+  },
+  "version": "0.7.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.nicholsai.com/mcp"
+    }
+  ]
+}
