@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "link2machine",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Connect supported AI clients to explicitly enrolled computers through typed operations, exact-machine routing, local policy, and execution receipts.",
   "author": {
     "name": "Nichols SI",
@@ -38,8 +38,11 @@
           "Read a file from my selected machine and show the execution receipt."
         ],
         "brandColor": "#05070B",
-        "logo": "./assets/logo.png",
-        "composerIcon": "./assets/composer-icon.png"
+        "brandColorDark": "#6DF0D6",
+        "logo": "./assets/icon.svg",
+        "logoDark": "./assets/icon.svg",
+        "composerIcon": "./assets/icon.svg",
+        "composerIconDark": "./assets/icon.svg"
       },
       "review": {
         "commerce": true,
