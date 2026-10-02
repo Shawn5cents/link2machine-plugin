@@ -10,88 +10,101 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Diagnose Grizzy on NucBox
+      - name: Diagnose Grizzy tunnel runtime
         if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "collective-nucbox"
-          echo "HOST_OK"
-
           uid_num="$(id -u)"
           export XDG_RUNTIME_DIR="/run/user/$uid_num"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_num/bus"
-
-          repo=/data/repos/grizzy
-          test -d "$repo/.git"
-          echo "GRIZZY_HEAD=$(git -C "$repo" rev-parse HEAD)"
-          echo "GRIZZY_BRANCH=$(git -C "$repo" branch --show-current)"
-          if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
-            echo "GRIZZY_REPO_DIRTY"
-            git -C "$repo" status --short
-          else
-            echo "GRIZZY_REPO_CLEAN"
-          fi
-
-          if systemctl --user is-active --quiet grizzy-operator.service; then
-            echo "GRIZZY_OPERATOR_ACTIVE"
-          else
-            echo "GRIZZY_OPERATOR_INACTIVE"
-          fi
-
-          set -a
-          source "$HOME/.config/grizzy/operator.env"
-          set +a
-          echo "GRIZZY_SHELL_FLAG=${GRIZZY_MCP_SHELL:-0}"
-
-          health="$(timeout 8s curl -fsS "http://127.0.0.1:${GRIZZY_MCP_PORT:-8791}/health" || true)"
-          if printf '%s' "$health" | grep -q '"allowShell":true'; then
-            echo "GRIZZY_HEALTH_ALLOW_SHELL_OK"
-          else
-            echo "GRIZZY_HEALTH_ALLOW_SHELL_FAIL"
-          fi
-
-          cd "$repo"
-          if timeout 20s node --input-type=module <<'NODE'
-          import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-          import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-          try {
-            const port = process.env.GRIZZY_MCP_PORT || '8791'
-            const token = process.env.GRIZZY_MCP_TOKEN
-            if (!token) process.exit(2)
-            const client = new Client({ name:'grizzy-diagnostic', version:'1.0.0' })
-            const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp/${token}`))
-            await client.connect(transport)
-            const r = await client.callTool({name:'run_program',arguments:{executable:'bash',args:['-lc','printf GRIZZY_SHELL_OK'],cwd:'grizzy',timeout_ms:10000}})
-            const out=(r?.content||[]).map(x=>x?.text||'').join('\n')
-            await client.close()
-            process.exit(out.includes('GRIZZY_SHELL_OK')?0:3)
-          } catch { process.exit(4) }
-          NODE
-          then
-            echo "GRIZZY_LOCAL_MCP_SHELL_OK"
-          else
-            echo "GRIZZY_LOCAL_MCP_SHELL_FAIL"
-          fi
 
           tunnel_bin="$(command -v tunnel-client || true)"
           if [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]]; then
             tunnel_bin="$HOME/.local/bin/tunnel-client"
           fi
-          if [[ -z "$tunnel_bin" ]]; then
-            echo "TUNNEL_CLIENT_MISSING"
-          else
-            echo "TUNNEL_CLIENT_PRESENT"
-            if timeout 12s "$tunnel_bin" runtimes status grizzy 2>/dev/null | grep -qi ready; then
-              echo "GRIZZY_TUNNEL_READY"
-            else
-              rc=$?
-              echo "GRIZZY_TUNNEL_NOT_READY_OR_STATUS_TIMEOUT=$rc"
-            fi
-            echo "TUNNEL_RUNTIME_HELP_BEGIN"
-            timeout 8s "$tunnel_bin" runtimes --help 2>&1 | sed -n '1,80p' || true
-            echo "TUNNEL_RUNTIME_HELP_END"
-          fi
+          test -n "$tunnel_bin"
+          echo "TUNNEL_CLIENT_PRESENT"
+
+          set +e
+          timeout 12s "$tunnel_bin" runtimes status grizzy --json > /tmp/grizzy-runtime-status.json 2>/tmp/grizzy-runtime-status.err
+          status_rc=$?
+          timeout 12s "$tunnel_bin" runtimes list --json > /tmp/grizzy-runtime-list.json 2>/tmp/grizzy-runtime-list.err
+          list_rc=$?
+          set -e
+          echo "STATUS_RC=$status_rc"
+          echo "LIST_RC=$list_rc"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          wanted = {
+              "alias","name","status","state","ready","running","healthy","pid",
+              "profile","profile_name","profileName","tunnel_id","tunnelId",
+              "error","last_error","lastError","message","runtime_state","runtimeState",
+              "connected","managed","process_state","processState"
+          }
+          sensitive = ("token","secret","key","credential","password","url","endpoint")
+
+          def safe(value, depth=0):
+              if depth > 5:
+                  return None
+              if isinstance(value, dict):
+                  out = {}
+                  for k, v in value.items():
+                      lk = str(k).lower()
+                      if any(s in lk for s in sensitive):
+                          continue
+                      if k in wanted:
+                          if isinstance(v, str):
+                              out[k] = v[:400]
+                          elif isinstance(v, (bool,int,float)) or v is None:
+                              out[k] = v
+                          else:
+                              out[k] = safe(v, depth+1)
+                      elif isinstance(v, (dict,list)):
+                          nested = safe(v, depth+1)
+                          if nested not in ({}, [], None):
+                              out[k] = nested
+                  return out
+              if isinstance(value, list):
+                  return [x for x in (safe(v, depth+1) for v in value) if x not in ({}, [], None)]
+              return value if isinstance(value, (bool,int,float)) or value is None else str(value)[:400]
+
+          for label, path in [
+              ("STATUS", "/tmp/grizzy-runtime-status.json"),
+              ("LIST", "/tmp/grizzy-runtime-list.json")
+          ]:
+              p = Path(path)
+              print(label + "_SAFE_BEGIN")
+              if not p.exists() or not p.read_text(errors="ignore").strip():
+                  print("NO_JSON_OUTPUT")
+              else:
+                  raw = p.read_text(errors="ignore")
+                  try:
+                      print(json.dumps(safe(json.loads(raw)), indent=2, sort_keys=True))
+                  except Exception:
+                      print("UNPARSEABLE_JSON_OUTPUT")
+              print(label + "_SAFE_END")
+          PY
+
+          echo "CONNECT_HELP_BEGIN"
+          timeout 8s "$tunnel_bin" runtimes connect --help 2>&1 | sed -n '1,140p' || true
+          echo "CONNECT_HELP_END"
+
+          echo "CREATE_HELP_BEGIN"
+          timeout 8s "$tunnel_bin" runtimes create --help 2>&1 | sed -n '1,120p' || true
+          echo "CREATE_HELP_END"
+
+          echo "TUNNEL_UNIT_NAMES_BEGIN"
+          systemctl --user list-unit-files --no-legend 2>/dev/null | awk '/tunnel|grizzy/ {print $1, $2}' | sed -n '1,80p' || true
+          echo "TUNNEL_UNIT_NAMES_END"
+
+          echo "TUNNEL_METADATA_PATHS_BEGIN"
+          find "$HOME/.config" "$HOME/.local/state" -maxdepth 4 -type f \( -iname '*tunnel*' -o -iname '*grizzy*runtime*' \) -printf '%p\n' 2>/dev/null | sed -n '1,80p' || true
+          echo "TUNNEL_METADATA_PATHS_END"
 
       - name: Validate public package
         run: |
