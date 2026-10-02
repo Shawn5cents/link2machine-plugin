@@ -10,22 +10,30 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Restart existing Grizzy Secure MCP Tunnel runtime
+      - name: Inspect Grizzy tunnel restart failure safely
         if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "collective-nucbox"
 
-          uid_num="$(id -u)"
-          export XDG_RUNTIME_DIR="/run/user/$uid_num"
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_num/bus"
+          echo "CONNECT_ERROR_SAFE_BEGIN"
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path("/tmp/grizzy-tunnel-connect.log")
+          text=p.read_text(errors="replace") if p.exists() else "connect log missing"
+          text=re.sub(r'https?://[^\s\"\']+', '<redacted-url>', text)
+          text=re.sub(r'\bsk-[A-Za-z0-9_-]{8,}\b', '<redacted-secret>', text)
+          text=re.sub(r'\b[A-Fa-f0-9]{32,}\b', '<redacted-hex>', text)
+          text=re.sub(r'(?i)(token|secret|credential|api[_ -]?key)(\s*[:=]\s*)([^\s]+)', r'\1\2<redacted>', text)
+          print(text[:5000])
+          PY
+          echo "CONNECT_ERROR_SAFE_END"
 
-          set -a
-          source "$HOME/.config/grizzy/operator.env"
-          set +a
-          test -n "${GRIZZY_MCP_TOKEN:-}"
-          test "${GRIZZY_MCP_SHELL:-0}" = "1"
+          echo "TUNNEL_PROFILE_FILES_BEGIN"
+          find "$HOME/.config/tunnel-client" -maxdepth 3 -type f -printf '%m %s %p\n' 2>/dev/null | sed -n '1,120p'
+          echo "TUNNEL_PROFILE_FILES_END"
 
           tunnel_bin="$(command -v tunnel-client || true)"
           if [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]]; then
@@ -33,55 +41,13 @@ jobs:
           fi
           test -n "$tunnel_bin"
 
-          mcp_url="http://127.0.0.1:${GRIZZY_MCP_PORT:-8791}/mcp/${GRIZZY_MCP_TOKEN}"
-          set +e
-          timeout 35s "$tunnel_bin" runtimes connect             --alias grizzy             --admin-profile default             --profile grizzy-chatgpt             --profile-dir "$HOME/.config/tunnel-client"             --organization-id org-TfAwjE3dDUcoPnqwyOSmPnC8             --mcp-server-url "$mcp_url"             >/tmp/grizzy-tunnel-connect.log 2>&1
-          connect_rc=$?
-          set -e
-          echo "GRIZZY_TUNNEL_CONNECT_RC=$connect_rc"
+          echo "TUNNEL_TOP_HELP_BEGIN"
+          timeout 8s "$tunnel_bin" --help 2>&1 | sed -n '1,160p' || true
+          echo "TUNNEL_TOP_HELP_END"
 
-          ready=0
-          for i in $(seq 1 20); do
-            status_json="$(timeout 10s "$tunnel_bin" runtimes status grizzy --json 2>/dev/null || true)"
-            if STATUS_JSON="$status_json" python3 - <<'PY'
-          import json, os, sys
-          try:
-              data=json.loads(os.environ.get("STATUS_JSON","{}"))
-          except Exception:
-              sys.exit(1)
-          sys.exit(0 if data.get("ready") is True and data.get("runtime_state") == "running" else 1)
-          PY
-            then
-              ready=1
-              break
-            fi
-            sleep 3
-          done
-
-          if [[ "$ready" != "1" ]]; then
-            echo "GRIZZY_TUNNEL_RESTART_FAILED"
-            status_json="$(timeout 10s "$tunnel_bin" runtimes status grizzy --json 2>/dev/null || true)"
-            STATUS_JSON="$status_json" python3 - <<'PY'
-          import json, os
-          try:
-              d=json.loads(os.environ.get("STATUS_JSON","{}"))
-          except Exception:
-              print("STATUS_UNAVAILABLE")
-              raise SystemExit
-          local=d.get("local") or {}
-          print("alias="+str(d.get("alias","")))
-          print("ready="+str(d.get("ready")))
-          print("runtime_state="+str(d.get("runtime_state","")))
-          print("healthy="+str(d.get("healthy")))
-          print("issues="+repr(local.get("issues") or []))
-          print("tmux_running="+str((local.get("tmux") or {}).get("running")))
-          PY
-            exit 1
-          fi
-
-          echo "GRIZZY_TUNNEL_READY"
-          echo "GRIZZY_TUNNEL_RUNTIME_RUNNING"
-          echo "GRIZZY_TUNNEL_RECOVERY_COMPLETE"
+          echo "DOCTOR_HELP_BEGIN"
+          timeout 8s "$tunnel_bin" doctor --help 2>&1 | sed -n '1,140p' || true
+          echo "DOCTOR_HELP_END"
 
       - name: Validate public package
         run: |
