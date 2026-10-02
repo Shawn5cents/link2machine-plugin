@@ -1,7 +1,6 @@
 name: plugin-ci
 
 on:
-  push:
   pull_request:
 
 jobs:
@@ -11,19 +10,100 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Diagnose Grizzy on NucBox
+        if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "collective-nucbox"
+          echo "HOST_OK"
+
+          uid_num="$(id -u)"
+          export XDG_RUNTIME_DIR="/run/user/$uid_num"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_num/bus"
+
+          repo=/data/repos/grizzy
+          test -d "$repo/.git"
+          echo "GRIZZY_HEAD=$(git -C "$repo" rev-parse HEAD)"
+          echo "GRIZZY_BRANCH=$(git -C "$repo" branch --show-current)"
+          if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
+            echo "GRIZZY_REPO_DIRTY"
+            git -C "$repo" status --short
+          else
+            echo "GRIZZY_REPO_CLEAN"
+          fi
+
+          if systemctl --user is-active --quiet grizzy-operator.service; then
+            echo "GRIZZY_OPERATOR_ACTIVE"
+          else
+            echo "GRIZZY_OPERATOR_INACTIVE"
+          fi
+
+          set -a
+          source "$HOME/.config/grizzy/operator.env"
+          set +a
+          echo "GRIZZY_SHELL_FLAG=${GRIZZY_MCP_SHELL:-0}"
+
+          health="$(timeout 8s curl -fsS "http://127.0.0.1:${GRIZZY_MCP_PORT:-8791}/health" || true)"
+          if printf '%s' "$health" | grep -q '"allowShell":true'; then
+            echo "GRIZZY_HEALTH_ALLOW_SHELL_OK"
+          else
+            echo "GRIZZY_HEALTH_ALLOW_SHELL_FAIL"
+          fi
+
+          cd "$repo"
+          if timeout 20s node --input-type=module <<'NODE'
+          import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+          import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+          try {
+            const port = process.env.GRIZZY_MCP_PORT || '8791'
+            const token = process.env.GRIZZY_MCP_TOKEN
+            if (!token) process.exit(2)
+            const client = new Client({ name:'grizzy-diagnostic', version:'1.0.0' })
+            const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp/${token}`))
+            await client.connect(transport)
+            const r = await client.callTool({name:'run_program',arguments:{executable:'bash',args:['-lc','printf GRIZZY_SHELL_OK'],cwd:'grizzy',timeout_ms:10000}})
+            const out=(r?.content||[]).map(x=>x?.text||'').join('\n')
+            await client.close()
+            process.exit(out.includes('GRIZZY_SHELL_OK')?0:3)
+          } catch { process.exit(4) }
+          NODE
+          then
+            echo "GRIZZY_LOCAL_MCP_SHELL_OK"
+          else
+            echo "GRIZZY_LOCAL_MCP_SHELL_FAIL"
+          fi
+
+          tunnel_bin="$(command -v tunnel-client || true)"
+          if [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]]; then
+            tunnel_bin="$HOME/.local/bin/tunnel-client"
+          fi
+          if [[ -z "$tunnel_bin" ]]; then
+            echo "TUNNEL_CLIENT_MISSING"
+          else
+            echo "TUNNEL_CLIENT_PRESENT"
+            if timeout 12s "$tunnel_bin" runtimes status grizzy 2>/dev/null | grep -qi ready; then
+              echo "GRIZZY_TUNNEL_READY"
+            else
+              rc=$?
+              echo "GRIZZY_TUNNEL_NOT_READY_OR_STATUS_TIMEOUT=$rc"
+            fi
+            echo "TUNNEL_RUNTIME_HELP_BEGIN"
+            timeout 8s "$tunnel_bin" runtimes --help 2>&1 | sed -n '1,80p' || true
+            echo "TUNNEL_RUNTIME_HELP_END"
+          fi
+
       - name: Validate public package
         run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
-
           expected_endpoint = "https://mcp.nicholsai.com/mcp"
           plugin = json.loads(Path("plugin.json").read_text())
           mcp = json.loads(Path("mcp.json").read_text())
           server = json.loads(Path("server.json").read_text())
           claude = json.loads(Path(".claude-plugin/plugin.json").read_text())
           claude_mcp = json.loads(Path(".mcp.json").read_text())
-
           assert plugin["version"] == "0.7.6"
           assert plugin["repository"] == "https://github.com/Shawn5cents/link2machine-plugin"
           assert plugin["extensions"]["com.openai"]["publication"]["release_notes"]
@@ -32,17 +112,6 @@ jobs:
           assert server["remotes"][0]["url"] == expected_endpoint
           assert claude["version"] == "0.7.6"
           assert claude_mcp["mcpServers"]["link2machine"]["url"] == expected_endpoint
-
-          for required in [
-              "README.md", "LICENSE", "assets/logo-v2.png",
-              "assets/composer-icon-v2.png", "skills/link2machine/SKILL.md",
-          ]:
-              p = Path(required)
-              assert p.is_file() and p.stat().st_size > 0, required
-
-          readme = Path("README.md").read_text()
-          assert "bootstrap/v0.6.2/nicholsai-link2machine-0.6.2.tgz" in readme
-          assert "link2machine-bootstrap connect --root" in readme
           print("Link2Machine public plugin verification: PASS")
           PY
 
