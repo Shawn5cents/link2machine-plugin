@@ -10,62 +10,107 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Locate existing Grizzy tunnel credential safely
+      - name: Restore Grizzy tunnel key from home offload if present
         if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "collective-nucbox"
 
-          echo "CANDIDATE_FILES_BEGIN"
-          find "$HOME/.config" "$HOME/.local/share" "$HOME/.local/state" "$HOME/Documents" "$HOME/Downloads"             -maxdepth 5 -type f             \( -iname '*openai*key*' -o -iname '*runtime*key*' -o -iname '*tunnel*.env' -o -iname '*openai*.env' -o -iname '*api-key*' \)             -printf '%m %s %p\n' 2>/dev/null | sed -n '1,160p'
-          echo "CANDIDATE_FILES_END"
+          uid_num="$(id -u)"
+          export XDG_RUNTIME_DIR="/run/user/$uid_num"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_num/bus"
 
-          echo "REFERENCE_FILES_BEGIN"
-          python3 - <<'PY'
+          offload_root="/run/media/shawn5cents/External/home-offload/shawn5cents"
+          exact="$offload_root/Downloads/openai-api-key.txt"
+          secure_dir="$HOME/.config/grizzy"
+          secure_key="$secure_dir/openai-runtime-key"
+          profile="$HOME/.config/tunnel-client/grizzy-chatgpt.yaml"
+
+          if [[ -f "$exact" ]]; then
+            echo "OFFLOAD_EXACT_KEY_FOUND"
+            if python3 - "$exact" <<'PY'
+          import re,sys
           from pathlib import Path
-          roots=[Path.home()/".config", Path.home()/".local/share", Path.home()/".local/state"]
-          needles=("OPENAI_ADMIN_KEY","CONTROL_PLANE_API_KEY","GRIZZY_OPENAI_RUNTIME_KEY","openai-api-key.txt","runtime-api-key")
-          found=[]
-          for root in roots:
-              if not root.exists(): continue
-              for p in root.rglob("*"):
-                  if not p.is_file(): continue
-                  try:
-                      if p.stat().st_size > 1024*1024: continue
-                      text=p.read_text(errors="ignore")
-                  except Exception:
-                      continue
-                  hits=[n for n in needles if n in text]
-                  if hits:
-                      found.append((str(p), hits, p.stat().st_mode & 0o777, p.stat().st_size))
-          for path,hits,mode,size in found[:120]:
-              print(f"{mode:o} {size} {path} refs={','.join(hits)}")
+          text=Path(sys.argv[1]).read_text(errors="ignore").strip()
+          raise SystemExit(0 if re.search(r'\bsk-[A-Za-z0-9_-]{20,}\b', text) else 1)
           PY
-          echo "REFERENCE_FILES_END"
+            then
+              echo "OFFLOAD_KEY_SHAPE_OK"
+            else
+              echo "OFFLOAD_KEY_SHAPE_INVALID"
+              exit 2
+            fi
 
-          echo "SECRET_SHAPE_CANDIDATES_BEGIN"
-          python3 - <<'PY'
+            mkdir -p "$secure_dir"
+            chmod 700 "$secure_dir"
+            install -m 600 "$exact" "$secure_key"
+
+            python3 - "$profile" "$secure_key" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          target=Path(sys.argv[2])
+          s=p.read_text()
           import re
-          from pathlib import Path
-          roots=[Path.home()/".config", Path.home()/".local/share", Path.home()/".local/state", Path.home()/"Documents", Path.home()/"Downloads"]
-          seen=set()
-          for root in roots:
-              if not root.exists(): continue
-              for p in root.rglob("*"):
-                  if not p.is_file() or str(p) in seen: continue
-                  seen.add(str(p))
-                  try:
-                      st=p.stat()
-                      if st.st_size==0 or st.st_size>256*1024: continue
-                      text=p.read_text(errors="ignore")
-                  except Exception:
-                      continue
-                  # Report only location/metadata when a file appears to contain an OpenAI-style key.
-                  if re.search(r'\bsk-[A-Za-z0-9_-]{20,}\b', text):
-                      print(f"{st.st_mode & 0o777:o} {st.st_size} {p}")
+          s=re.sub(r'(?m)^\s*api_key:\s*["\x27]?(?:file:|env:)[^"\x27\s]+["\x27]?\s*$',
+                   '    api_key: "file:' + str(target) + '"', s)
+          if str(target) not in s:
+              raise SystemExit("profile-key-reference-update-failed")
+          p.write_text(s)
+          p.chmod(0o600)
+          print("GRIZZY_PROFILE_SECURE_KEY_REF_OK")
           PY
-          echo "SECRET_SHAPE_CANDIDATES_END"
+
+            tunnel_bin="$(command -v tunnel-client || true)"
+            [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]] && tunnel_bin="$HOME/.local/bin/tunnel-client"
+            test -n "$tunnel_bin"
+
+            "$tunnel_bin" doctor --profile grizzy-chatgpt >/tmp/grizzy-doctor.out 2>/tmp/grizzy-doctor.err
+            echo "GRIZZY_TUNNEL_DOCTOR_OK"
+
+            systemctl --user stop grizzy-openai-tunnel.service || true
+            systemctl --user reset-failed grizzy-openai-tunnel.service || true
+            rm -f "$HOME/.local/state/tunnel-client/health/grizzy.url"
+            systemctl --user start grizzy-openai-tunnel.service
+
+            active=0
+            for i in $(seq 1 20); do
+              if systemctl --user is-active --quiet grizzy-openai-tunnel.service; then
+                active=1
+                break
+              fi
+              sleep 1
+            done
+            test "$active" = "1"
+            echo "GRIZZY_TUNNEL_SERVICE_ACTIVE"
+
+            health_file="$HOME/.local/state/tunnel-client/health/grizzy.url"
+            ready=0
+            for i in $(seq 1 30); do
+              if [[ -s "$health_file" ]]; then
+                base="$(cat "$health_file")"
+                code="$(curl -sS -o /tmp/grizzy-ready -w '%{http_code}' --max-time 3 "$base/readyz" || true)"
+                if [[ "$code" = "200" ]]; then
+                  ready=1
+                  break
+                fi
+              fi
+              sleep 2
+            done
+            test "$ready" = "1"
+            echo "GRIZZY_TUNNEL_READYZ_OK"
+            echo "GRIZZY_TUNNEL_RECOVERY_COMPLETE"
+          else
+            echo "OFFLOAD_EXACT_KEY_NOT_FOUND"
+            echo "OFFLOAD_CANDIDATES_BEGIN"
+            if [[ -d "$offload_root" ]]; then
+              find "$offload_root" -maxdepth 5 -type f                 \( -iname '*openai*key*' -o -iname '*runtime*key*' -o -iname '*api-key*' \)                 -printf '%m %s %p\n' 2>/dev/null | sed -n '1,120p'
+            else
+              echo "OFFLOAD_ROOT_NOT_MOUNTED"
+            fi
+            echo "OFFLOAD_CANDIDATES_END"
+          fi
 
       - name: Validate public package
         run: |
