@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Restore Grizzy tunnel key from home offload if present
+      - name: Complete Grizzy Secure MCP Tunnel recovery
         if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
         shell: bash
         run: |
@@ -21,96 +21,87 @@ jobs:
           export XDG_RUNTIME_DIR="/run/user/$uid_num"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_num/bus"
 
-          offload_root="/run/media/shawn5cents/External/home-offload/shawn5cents"
-          exact="$offload_root/Downloads/openai-api-key.txt"
           secure_dir="$HOME/.config/grizzy"
           secure_key="$secure_dir/openai-runtime-key"
+          envfile="$secure_dir/openai-tunnel.env"
           profile="$HOME/.config/tunnel-client/grizzy-chatgpt.yaml"
+          stale="file:/home/shawn5cents/Downloads/openai-api-key.txt"
+          desired="file:$secure_key"
 
-          if [[ -f "$exact" ]]; then
-            echo "OFFLOAD_EXACT_KEY_FOUND"
-            if python3 - "$exact" <<'PY'
-          import re,sys
-          from pathlib import Path
-          text=Path(sys.argv[1]).read_text(errors="ignore").strip()
-          raise SystemExit(0 if re.search(r'\bsk-[A-Za-z0-9_-]{20,}\b', text) else 1)
-          PY
-            then
-              echo "OFFLOAD_KEY_SHAPE_OK"
-            else
-              echo "OFFLOAD_KEY_SHAPE_INVALID"
-              exit 2
-            fi
+          test -s "$secure_key"
+          test "$(stat -c '%a' "$secure_key")" = "600"
+          echo "GRIZZY_SECURE_RUNTIME_KEY_PRESENT"
 
-            mkdir -p "$secure_dir"
-            chmod 700 "$secure_dir"
-            install -m 600 "$exact" "$secure_key"
-
-            python3 - "$profile" "$secure_key" <<'PY'
+          python3 - "$profile" "$stale" "$desired" <<'PY'
           import sys
           from pathlib import Path
-          p=Path(sys.argv[1])
-          target=Path(sys.argv[2])
+          p=Path(sys.argv[1]); stale=sys.argv[2]; desired=sys.argv[3]
           s=p.read_text()
-          import re
-          s=re.sub(r'(?m)^\s*api_key:\s*["\x27]?(?:file:|env:)[^"\x27\s]+["\x27]?\s*$',
-                   '    api_key: "file:' + str(target) + '"', s)
-          if str(target) not in s:
+          if stale in s:
+              s=s.replace(stale, desired)
+              p.write_text(s)
+          if desired not in p.read_text():
               raise SystemExit("profile-key-reference-update-failed")
-          p.write_text(s)
           p.chmod(0o600)
           print("GRIZZY_PROFILE_SECURE_KEY_REF_OK")
           PY
 
-            tunnel_bin="$(command -v tunnel-client || true)"
-            [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]] && tunnel_bin="$HOME/.local/bin/tunnel-client"
-            test -n "$tunnel_bin"
+          # The legacy unit declares EnvironmentFile=...; keep a protected,
+          # non-secret compatibility file because the profile now owns both
+          # tunnel ID and runtime key references.
+          printf '# credential references live in grizzy-chatgpt.yaml\n' > "$envfile"
+          chmod 600 "$envfile"
+          echo "GRIZZY_TUNNEL_ENV_COMPAT_OK"
 
-            "$tunnel_bin" doctor --profile grizzy-chatgpt >/tmp/grizzy-doctor.out 2>/tmp/grizzy-doctor.err
-            echo "GRIZZY_TUNNEL_DOCTOR_OK"
+          tunnel_bin="$(command -v tunnel-client || true)"
+          [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]] && tunnel_bin="$HOME/.local/bin/tunnel-client"
+          test -n "$tunnel_bin"
 
-            systemctl --user stop grizzy-openai-tunnel.service || true
-            systemctl --user reset-failed grizzy-openai-tunnel.service || true
-            rm -f "$HOME/.local/state/tunnel-client/health/grizzy.url"
-            systemctl --user start grizzy-openai-tunnel.service
+          "$tunnel_bin" doctor --profile grizzy-chatgpt >/tmp/grizzy-doctor.out 2>/tmp/grizzy-doctor.err
+          echo "GRIZZY_TUNNEL_DOCTOR_OK"
 
-            active=0
-            for i in $(seq 1 20); do
-              if systemctl --user is-active --quiet grizzy-openai-tunnel.service; then
-                active=1
+          systemctl --user stop grizzy-openai-tunnel.service || true
+          systemctl --user reset-failed grizzy-openai-tunnel.service || true
+          rm -f "$HOME/.local/state/tunnel-client/health/grizzy.url"
+          systemctl --user start grizzy-openai-tunnel.service
+
+          active=0
+          for i in $(seq 1 20); do
+            if systemctl --user is-active --quiet grizzy-openai-tunnel.service; then
+              active=1
+              break
+            fi
+            sleep 1
+          done
+          test "$active" = "1"
+          echo "GRIZZY_TUNNEL_SERVICE_ACTIVE"
+
+          health_file="$HOME/.local/state/tunnel-client/health/grizzy.url"
+          ready=0
+          for i in $(seq 1 35); do
+            if [[ -s "$health_file" ]]; then
+              base="$(cat "$health_file")"
+              code="$(curl -sS -o /tmp/grizzy-ready -w '%{http_code}' --max-time 3 "$base/readyz" || true)"
+              if [[ "$code" = "200" ]]; then
+                ready=1
                 break
               fi
-              sleep 1
-            done
-            test "$active" = "1"
-            echo "GRIZZY_TUNNEL_SERVICE_ACTIVE"
-
-            health_file="$HOME/.local/state/tunnel-client/health/grizzy.url"
-            ready=0
-            for i in $(seq 1 30); do
-              if [[ -s "$health_file" ]]; then
-                base="$(cat "$health_file")"
-                code="$(curl -sS -o /tmp/grizzy-ready -w '%{http_code}' --max-time 3 "$base/readyz" || true)"
-                if [[ "$code" = "200" ]]; then
-                  ready=1
-                  break
-                fi
-              fi
-              sleep 2
-            done
-            test "$ready" = "1"
-            echo "GRIZZY_TUNNEL_READYZ_OK"
-            echo "GRIZZY_TUNNEL_RECOVERY_COMPLETE"
-          else
-            echo "OFFLOAD_EXACT_KEY_NOT_FOUND"
-            echo "OFFLOAD_CANDIDATES_BEGIN"
-            if [[ -d "$offload_root" ]]; then
-              find "$offload_root" -maxdepth 5 -type f                 \( -iname '*openai*key*' -o -iname '*runtime*key*' -o -iname '*api-key*' \)                 -printf '%m %s %p\n' 2>/dev/null | sed -n '1,120p'
-            else
-              echo "OFFLOAD_ROOT_NOT_MOUNTED"
             fi
-            echo "OFFLOAD_CANDIDATES_END"
-          fi
+            sleep 2
+          done
+          test "$ready" = "1"
+          echo "GRIZZY_TUNNEL_READYZ_OK"
+
+          base="$(cat "$health_file")"
+          health_code="$(curl -sS -o /tmp/grizzy-health -w '%{http_code}' --max-time 3 "$base/healthz" || true)"
+          test "$health_code" = "200"
+          echo "GRIZZY_TUNNEL_HEALTHZ_OK"
+
+          pid="$(systemctl --user show -p MainPID --value grizzy-openai-tunnel.service)"
+          test "$pid" -gt 1
+          echo "GRIZZY_TUNNEL_PROCESS_OK"
+
+          echo "GRIZZY_TUNNEL_RECOVERY_COMPLETE"
 
       - name: Validate public package
         run: |
