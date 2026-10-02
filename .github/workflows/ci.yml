@@ -10,60 +10,67 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Recover Grizzy tunnel with existing runtime service
+      - name: Inspect Grizzy tunnel service failure safely
         if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "collective-nucbox"
-
           uid_num="$(id -u)"
           export XDG_RUNTIME_DIR="/run/user/$uid_num"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_num/bus"
 
-          test -f "$HOME/.config/grizzy/openai-tunnel.env"
-          test "$(stat -c '%a' "$HOME/.config/grizzy/openai-tunnel.env")" = "600"
+          echo "SERVICE_STATE_BEGIN"
+          systemctl --user show grizzy-openai-tunnel.service             -p LoadState -p ActiveState -p SubState -p Result -p MainPID -p ExecMainCode -p ExecMainStatus -p NRestarts
+          echo "SERVICE_STATE_END"
 
-          systemctl --user daemon-reload
-          systemctl --user restart grizzy-openai-tunnel.service
+          echo "PROFILE_SAFE_BEGIN"
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path.home()/".config/tunnel-client/grizzy-chatgpt.yaml"
+          if not p.exists():
+              print("PROFILE_MISSING")
+          else:
+              for raw in p.read_text(errors="replace").splitlines():
+                  line=raw.rstrip()
+                  if not line.strip() or line.lstrip().startswith("#"):
+                      continue
+                  if ":" not in line:
+                      continue
+                  indent=len(line)-len(line.lstrip())
+                  key=line.strip().split(":",1)[0]
+                  low=key.lower()
+                  if any(x in low for x in ("key","token","secret","password","credential")):
+                      val="<redacted>"
+                  else:
+                      value=line.split(":",1)[1].strip()
+                      if value:
+                          if re.search(r'https?://', value):
+                              val="<configured-url>"
+                          elif len(value)>80:
+                              val="<configured>"
+                          else:
+                              val=value
+                      else:
+                          val=""
+                  print(" "*indent + key + (": "+val if val else ":"))
+          PY
+          echo "PROFILE_SAFE_END"
 
-          active=0
-          for i in $(seq 1 20); do
-            if systemctl --user is-active --quiet grizzy-openai-tunnel.service; then
-              active=1
-              break
-            fi
-            sleep 1
-          done
-          test "$active" = "1"
-          echo "GRIZZY_TUNNEL_SERVICE_ACTIVE"
+          echo "JOURNAL_SAFE_BEGIN"
+          journalctl --user -u grizzy-openai-tunnel.service -n 80 --no-pager -o cat 2>/dev/null |           python3 -c 'import re,sys
+          text=sys.stdin.read()
+          text=re.sub(r"https?://[^\\s\\\"\\x27]+","<redacted-url>",text)
+          text=re.sub(r"\\bsk-[A-Za-z0-9_-]{8,}\\b","<redacted-secret>",text)
+          text=re.sub(r"\\b[A-Fa-f0-9]{32,}\\b","<redacted-hex>",text)
+          text=re.sub(r"(?i)(token|secret|credential|api[_ -]?key)(\\s*[:=]\\s*)([^\\s]+)",r"\\1\\2<redacted>",text)
+          print(text[-12000:])'
+          echo "JOURNAL_SAFE_END"
 
-          pid="$(systemctl --user show -p MainPID --value grizzy-openai-tunnel.service)"
-          test "$pid" -gt 1
-          echo "GRIZZY_TUNNEL_PID_PRESENT"
-
-          cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
-          printf '%s' "$cmd" | grep -q 'tunnel-client'
-          printf '%s' "$cmd" | grep -q 'grizzy-chatgpt'
-          echo "GRIZZY_TUNNEL_PROCESS_OK"
-
-          ready=0
-          for i in $(seq 1 30); do
-            code="$(curl -sS -o /tmp/grizzy-ready-body -w '%{http_code}' --max-time 3 http://127.0.0.1:8080/readyz || true)"
-            if [[ "$code" = "200" ]]; then
-              ready=1
-              break
-            fi
-            sleep 2
-          done
-          test "$ready" = "1"
-          echo "GRIZZY_TUNNEL_READYZ_OK"
-
-          health_code="$(curl -sS -o /tmp/grizzy-health-body -w '%{http_code}' --max-time 3 http://127.0.0.1:8080/healthz || true)"
-          test "$health_code" = "200"
-          echo "GRIZZY_TUNNEL_HEALTHZ_OK"
-
-          echo "GRIZZY_LEGACY_TUNNEL_RECOVERY_COMPLETE"
+          echo "PORTS_BEGIN"
+          ss -ltnp 2>/dev/null | awk '$4 ~ /:8080$|:8791$/ {print $1,$4,$6}' | sed -n '1,40p'
+          echo "PORTS_END"
 
       - name: Validate public package
         run: |
