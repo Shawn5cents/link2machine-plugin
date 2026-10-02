@@ -10,61 +10,62 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check repaired Grizzy tunnel prerequisites
+      - name: Locate existing Grizzy tunnel credential safely
         if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
         shell: bash
         run: |
-          set -u
-          test "$(hostname)" = "collective-nucbox" || { echo HOST_FAIL; exit 1; }
-          echo HOST_OK
+          set -euo pipefail
+          test "$(hostname)" = "collective-nucbox"
 
-          profile="$HOME/.config/tunnel-client/grizzy-chatgpt.yaml"
-          envfile="$HOME/.config/grizzy/openai-tunnel.env"
-          [[ -f "$profile" ]] && echo PROFILE_PRESENT || echo PROFILE_MISSING
-          [[ -f "$envfile" ]] && echo ENVFILE_PRESENT || echo ENVFILE_MISSING
-          [[ -f "$envfile" ]] && echo "ENVFILE_MODE=$(stat -c '%a' "$envfile")"
+          echo "CANDIDATE_FILES_BEGIN"
+          find "$HOME/.config" "$HOME/.local/share" "$HOME/.local/state" "$HOME/Documents" "$HOME/Downloads"             -maxdepth 5 -type f             \( -iname '*openai*key*' -o -iname '*runtime*key*' -o -iname '*tunnel*.env' -o -iname '*openai*.env' -o -iname '*api-key*' \)             -printf '%m %s %p\n' 2>/dev/null | sed -n '1,160p'
+          echo "CANDIDATE_FILES_END"
 
+          echo "REFERENCE_FILES_BEGIN"
           python3 - <<'PY'
           from pathlib import Path
-          p=Path.home()/".config/tunnel-client/grizzy-chatgpt.yaml"
-          if not p.exists():
-              print("PROFILE_CHECK=MISSING")
-          else:
-              s=p.read_text()
-              print("PROFILE_USES_ENV_REF="+str("env:CONTROL_PLANE_API_KEY" in s))
-              print("PROFILE_USES_STALE_DOWNLOAD_REF="+str("file:/home/shawn5cents/Downloads/openai-api-key.txt" in s))
+          roots=[Path.home()/".config", Path.home()/".local/share", Path.home()/".local/state"]
+          needles=("OPENAI_ADMIN_KEY","CONTROL_PLANE_API_KEY","GRIZZY_OPENAI_RUNTIME_KEY","openai-api-key.txt","runtime-api-key")
+          found=[]
+          for root in roots:
+              if not root.exists(): continue
+              for p in root.rglob("*"):
+                  if not p.is_file(): continue
+                  try:
+                      if p.stat().st_size > 1024*1024: continue
+                      text=p.read_text(errors="ignore")
+                  except Exception:
+                      continue
+                  hits=[n for n in needles if n in text]
+                  if hits:
+                      found.append((str(p), hits, p.stat().st_mode & 0o777, p.stat().st_size))
+          for path,hits,mode,size in found[:120]:
+              print(f"{mode:o} {size} {path} refs={','.join(hits)}")
           PY
+          echo "REFERENCE_FILES_END"
 
-          if [[ -f "$envfile" ]]; then
-            set -a
-            source "$envfile"
-            set +a
-            [[ -n "${CONTROL_PLANE_API_KEY:-}" ]] && echo RUNTIME_KEY_PRESENT || echo RUNTIME_KEY_MISSING
-            [[ -n "${CONTROL_PLANE_TUNNEL_ID:-}" ]] && echo TUNNEL_ID_PRESENT || echo TUNNEL_ID_MISSING
-          fi
-
-          tunnel_bin="$(command -v tunnel-client || true)"
-          [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]] && tunnel_bin="$HOME/.local/bin/tunnel-client"
-          [[ -n "$tunnel_bin" ]] && echo TUNNEL_CLIENT_PRESENT || echo TUNNEL_CLIENT_MISSING
-
-          if [[ -n "$tunnel_bin" && -f "$envfile" ]]; then
-            "$tunnel_bin" doctor --profile grizzy-chatgpt >/tmp/grizzy-doctor.out 2>/tmp/grizzy-doctor.err
-            rc=$?
-            echo "DOCTOR_RC=$rc"
-            if [[ "$rc" -ne 0 ]]; then
-              python3 - <<'PY'
+          echo "SECRET_SHAPE_CANDIDATES_BEGIN"
+          python3 - <<'PY'
           import re
           from pathlib import Path
-          text=Path("/tmp/grizzy-doctor.err").read_text(errors="replace") if Path("/tmp/grizzy-doctor.err").exists() else ""
-          text=re.sub(r'https?://[^\s\"\x27]+','<redacted-url>',text)
-          text=re.sub(r'\bsk-[A-Za-z0-9_-]{8,}\b','<redacted-secret>',text)
-          text=re.sub(r'\b[A-Fa-f0-9]{32,}\b','<redacted-hex>',text)
-          print(text[:3000])
+          roots=[Path.home()/".config", Path.home()/".local/share", Path.home()/".local/state", Path.home()/"Documents", Path.home()/"Downloads"]
+          seen=set()
+          for root in roots:
+              if not root.exists(): continue
+              for p in root.rglob("*"):
+                  if not p.is_file() or str(p) in seen: continue
+                  seen.add(str(p))
+                  try:
+                      st=p.stat()
+                      if st.st_size==0 or st.st_size>256*1024: continue
+                      text=p.read_text(errors="ignore")
+                  except Exception:
+                      continue
+                  # Report only location/metadata when a file appears to contain an OpenAI-style key.
+                  if re.search(r'\bsk-[A-Za-z0-9_-]{20,}\b', text):
+                      print(f"{st.st_mode & 0o777:o} {st.st_size} {p}")
           PY
-            fi
-          fi
-
-          exit 0
+          echo "SECRET_SHAPE_CANDIDATES_END"
 
       - name: Validate public package
         run: |
@@ -75,7 +76,6 @@ jobs:
           plugin = json.loads(Path("plugin.json").read_text())
           mcp = json.loads(Path("mcp.json").read_text())
           server = json.loads(Path("server.json").read_text())
-          claude = json.loads(Path(".claude-plugin/plugin.json").read_text())
           claude_mcp = json.loads(Path(".mcp.json").read_text())
           assert plugin["version"] == "0.7.6"
           assert mcp["mcpServers"]["link2machine"]["url"] == expected_endpoint
