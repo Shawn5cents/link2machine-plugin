@@ -10,44 +10,60 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Inspect Grizzy tunnel restart failure safely
+      - name: Recover Grizzy tunnel with existing runtime service
         if: github.head_ref == 'ops/diagnose-grizzy-nucbox'
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "collective-nucbox"
 
-          echo "CONNECT_ERROR_SAFE_BEGIN"
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-          p=Path("/tmp/grizzy-tunnel-connect.log")
-          text=p.read_text(errors="replace") if p.exists() else "connect log missing"
-          text=re.sub(r'https?://[^\s\"\']+', '<redacted-url>', text)
-          text=re.sub(r'\bsk-[A-Za-z0-9_-]{8,}\b', '<redacted-secret>', text)
-          text=re.sub(r'\b[A-Fa-f0-9]{32,}\b', '<redacted-hex>', text)
-          text=re.sub(r'(?i)(token|secret|credential|api[_ -]?key)(\s*[:=]\s*)([^\s]+)', r'\1\2<redacted>', text)
-          print(text[:5000])
-          PY
-          echo "CONNECT_ERROR_SAFE_END"
+          uid_num="$(id -u)"
+          export XDG_RUNTIME_DIR="/run/user/$uid_num"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_num/bus"
 
-          echo "TUNNEL_PROFILE_FILES_BEGIN"
-          find "$HOME/.config/tunnel-client" -maxdepth 3 -type f -printf '%m %s %p\n' 2>/dev/null | sed -n '1,120p'
-          echo "TUNNEL_PROFILE_FILES_END"
+          test -f "$HOME/.config/grizzy/openai-tunnel.env"
+          test "$(stat -c '%a' "$HOME/.config/grizzy/openai-tunnel.env")" = "600"
 
-          tunnel_bin="$(command -v tunnel-client || true)"
-          if [[ -z "$tunnel_bin" && -x "$HOME/.local/bin/tunnel-client" ]]; then
-            tunnel_bin="$HOME/.local/bin/tunnel-client"
-          fi
-          test -n "$tunnel_bin"
+          systemctl --user daemon-reload
+          systemctl --user restart grizzy-openai-tunnel.service
 
-          echo "TUNNEL_TOP_HELP_BEGIN"
-          timeout 8s "$tunnel_bin" --help 2>&1 | sed -n '1,160p' || true
-          echo "TUNNEL_TOP_HELP_END"
+          active=0
+          for i in $(seq 1 20); do
+            if systemctl --user is-active --quiet grizzy-openai-tunnel.service; then
+              active=1
+              break
+            fi
+            sleep 1
+          done
+          test "$active" = "1"
+          echo "GRIZZY_TUNNEL_SERVICE_ACTIVE"
 
-          echo "DOCTOR_HELP_BEGIN"
-          timeout 8s "$tunnel_bin" doctor --help 2>&1 | sed -n '1,140p' || true
-          echo "DOCTOR_HELP_END"
+          pid="$(systemctl --user show -p MainPID --value grizzy-openai-tunnel.service)"
+          test "$pid" -gt 1
+          echo "GRIZZY_TUNNEL_PID_PRESENT"
+
+          cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+          printf '%s' "$cmd" | grep -q 'tunnel-client'
+          printf '%s' "$cmd" | grep -q 'grizzy-chatgpt'
+          echo "GRIZZY_TUNNEL_PROCESS_OK"
+
+          ready=0
+          for i in $(seq 1 30); do
+            code="$(curl -sS -o /tmp/grizzy-ready-body -w '%{http_code}' --max-time 3 http://127.0.0.1:8080/readyz || true)"
+            if [[ "$code" = "200" ]]; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = "1"
+          echo "GRIZZY_TUNNEL_READYZ_OK"
+
+          health_code="$(curl -sS -o /tmp/grizzy-health-body -w '%{http_code}' --max-time 3 http://127.0.0.1:8080/healthz || true)"
+          test "$health_code" = "200"
+          echo "GRIZZY_TUNNEL_HEALTHZ_OK"
+
+          echo "GRIZZY_LEGACY_TUNNEL_RECOVERY_COMPLETE"
 
       - name: Validate public package
         run: |
